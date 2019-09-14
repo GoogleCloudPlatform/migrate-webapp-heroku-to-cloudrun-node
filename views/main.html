@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>
+      A sample to-do list
+    </title>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+    <style>
+      .list-group {
+        margin-top: 20px;
+      }
+
+      .task-input {
+        width: 20rem !important;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-light bg-light">
+      <span class="navbar-brand mb-0 h1">My To-do App</span>
+      <form class="form-inline" method="POST" action="/task">
+        <input class="form-control mr-sm-2 task-input" type="text" name="task" placeholder="Enter task" aria-label="Enter task">
+        <button type="submit" class="btn btn-success">Add Task</button>
+      </form>
+    </nav>
+    <div class="container">
+      <ul class="list-group">
+        {{#tasks}}
+          <li class="list-group-item">{{description}}</li>
+        {{/tasks}}
+      </ul>
+    </div>
+  </body>
+</html>

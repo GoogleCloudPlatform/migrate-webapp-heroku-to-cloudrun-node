@@ -27,10 +27,14 @@ app.engine('html', mustacheExpress());
 app.set('view engine', 'html');
 app.set('views', __dirname + '/views');
 
-const config = parse(process.env.DATABASE_URL);
+config = parse(process.env.DATABASE_URL);
+// Check if database running in Heroku (AWS) or Cloud Run. 
+// Heroku and Cloud Run handle SSL traffic differently
+if (config.host.includes("amazonaws.com")) {
+  config.ssl = { rejectUnauthorized: false };
+}
 const client = new Client(config);
 const PORT = process.env.PORT || 8080;
-
 /**
  * Run is the starting point for our application. It first connects to the
  * database and then starts the express server
@@ -57,6 +61,7 @@ app.get('/', async (req, res) => {
       tasks: result.rows
     };
     res.render('main', alltasks);
+    console.log(`Displaying ${alltasks.tasks.length} tasks.`)
   } catch(e) {
     console.error(e);
     res.status(500).end(e.toString());
@@ -75,6 +80,7 @@ app.post('/task', async (req, res) => {
     await client.query(
       `INSERT INTO tasks (DESCRIPTION) VALUES ('${taskDescription}')`);
     res.redirect('/');
+    console.log(`Added task "${taskDescription}" to database`);
   } catch(e) {
     console.error(e);
     res.sendStatus(500);

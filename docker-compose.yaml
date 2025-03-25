@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/web
+    command: ["npm", "start"]
+
+workers:
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/workers
+  command: ["node", "all-workers.js"]

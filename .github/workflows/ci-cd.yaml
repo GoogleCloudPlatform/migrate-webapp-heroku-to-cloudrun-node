@@ -1,0 +1,82 @@
+name: Build & Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - gcp-devtest
+
+env:
+  PROJECT_ID: provarity-dev-test
+  REGION: us-central1
+  REPO_NAME: ${{github.repository}}
+  ARTIFACT_DOMAIN: us-central1-docker.pkg.dev
+  SERVICE_ACCOUNT: github-action-dev@provarity-devtest.iam.gserviceaccount.com
+  WIF_PROVIDER: /projects/471809734182/locations/global/workloadIdentityPools/github-identity-pool/providers/github-actions-provider
+  CLOUD_RUN: run4-dev-220-cloudrun-1
+  APP_IMAGE: app
+  WORKER_IMAGE: workers
+
+jobs:
+  build and deploy:
+    runs on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud with WIF
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{env.WIF_PROVIDER}}
+          service_account: ${{env.SERVICE_ACCOUNT}}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v1
+    
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker $ARTIFACT_DOMAIN
+
+      - name: Build and Push container images from docker-compose (overwrrite latest)
+        run: |
+          docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE . --build-arg CMD="npm start"
+          docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE . --build-arg CMD="node all-workers.js"
+          
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE
+          
+      - name: Check cloud run existence
+        id: check-run
+        run: |
+          if gcloud run services decribe $CLOUD_RUN --region=$REGION --platform=managed; then
+            echo "exists=true" >> $GITHUB_output
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy APP to cloud run
+        if: steps.check-run.outputs.exists == 'true'
+        run:
+          gcloud run deploy $APP_IMAGE \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE \
+            --region=$REGION \
+            --platform=managed \
+            --set-env-vars="NODE_ENV=production,PORT=8080"\
+            --allow-unauthenticated \
+            --quiet
+
+      - name: Deploy Workers to cloud run
+        if: steps.check-run.outputs.exists == 'true'
+        run:
+          gcloud run deploy $WORKER_IMAGE \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE \
+            --region=$REGION \
+            --platform=managed \
+            --set-env-vars="NODE_ENV=production,PORT=8080"\
+            --allow-unauthenticated \
+            --quiet
+
+   
+

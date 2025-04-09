@@ -12,6 +12,8 @@ env:
   REPO: ${{ secrets.REPO }} # Artifact Registry Repositiry 
 
   IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
+  # The COMMIT_TAG (which is the Git commit SHA) provides traceability between your code and deployed images. Benefits include:
+  # You can determine exactly which code version is running in production
   COMMIT_TAG: ${{ github.sha }}
 
 jobs:
@@ -43,13 +45,7 @@ jobs:
     
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ secrets.ARTIFACT_DOMAIN }}
-      
-      # Why do we need this?
-      - name: Install Docker Compose
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y docker-compose
-      
+          
       # Build four different Docker images with the same codebase but different commands to run when the container starts.
       # Each image should have a different CMD command, as follows:
       # - IGNITEDAPI should have command: ["npm", "start"]

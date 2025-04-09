@@ -14,3 +14,28 @@ workers:
     dockerfile: Dockerfile
   image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/workers
   command: ["node", "all-workers.js"]
+#################
+
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/ignitedapi_dev
+    command: ["npm", "start"]
+
+  workers:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/ignitedapi_dev
+    command: ["node", "all-workers.js"]
+
+  ignitedapi_scheduler:
+    build:
+      context: .
+      args:
+        CMD: node workers/scheduled/poc-warning.js
+    image: ignitedapi-scheduler

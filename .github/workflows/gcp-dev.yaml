@@ -1,0 +1,194 @@
+name: Build & Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - migrate-gcp-heroku
+
+env:
+  PROJECT_ID: provarity-dev-test
+  REGION: us-central1
+  REPO_NAME: ${{github.repository}}
+  ARTIFACT_DOMAIN: us-central1-docker.pkg.dev
+  SERVICE_ACCOUNT: github-action-dev@provarity-devtest.iam.gserviceaccount.com
+  WIF_PROVIDER: /projects/471809734182/locations/global/workloadIdentityPools/github-identity-pool/providers/github-actions-provider
+  CLOUD_RUN: run4-dev-220-cloudrun-1
+  APP_IMAGE: app
+  WORKER_IMAGE: workers
+  
+
+  IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
+  COMMIT_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-push:
+    runs on: ubuntu-22.04
+    environment: gcp-dev
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud with WIF
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{secrets.WIF_PROVIDER}}
+          service_account: ${{secrets.SERVICE_ACCOUNT}}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v1
+    
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ secrets.ARTIFACT_DOMAIN }}
+      
+      # Why do we need this?
+      - name: Install Docker Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
+      
+      # Build four different Docker images with the same codebase but different commands to run when the container starts.
+      # Each image should have a different CMD command, as follows:
+      # - IGNITEDAPI should have command: ["npm", "start"]
+      # - IGNITEDAPI_SCHEDULER  should have command: ["npm", "workers/scheduled/poc-warning.js"]
+      # - IGNITEDAPI_WORKERS should have command:  ["node", "all-workers.js"]
+      # - IGNITED_CHAT_STAGING  should have command: ["npm", "start"]
+      - name: Build and tag all FOUR images with respective CMDs commands
+        run: |
+          echo "IMAGE_BASE from the Env variable = "
+          echo $IMAGE_BASE
+          echo "IMAGE_BASE from the Secrets variable = "
+          echo "IMAGE_BASE=${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
+          echo $IMAGE_BASE
+
+          declare -A IMAGE_CMDS=(
+            ["${{ secrets.IGNITEDAPI }}"]='["npm", "start"]'
+            ["${{ secrets.IGNITEDAPI_SCHEDULER }}"]='["npm", "workers/scheduled/poc-warning.js"]'
+            ["${{ secrets.IGNITEDAPI_WORKERS }}"]='["node", "all-workers.js"]'
+            ["${{ secrets.IGNITED_CHAT_STAGING }}"]='["npm", "start"]'
+          )
+
+          for IMAGE in "${!IMAGE_CMDS[@]}"; do
+            CMD_ARG=${IMAGE_CMDS[$IMAGE]}
+            echo "Building $IMAGE with CMD: $CMD_ARG"
+            docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$COMMIT_TAG . \
+              --build-arg CMD="$CMD_ARG"
+          done
+      
+      # Pull the active "latest" from the repository and then delete all images
+      # In the nest step, we will retag the pulled "latest" to "previous"
+      - name: Pull latest and cleanup old images in Artifact Registry
+        run: |
+          IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
+          KEEP_TAGS=("latest" "previous")
+
+          for IMAGE in "${IMAGES[@]}"; do
+            echo "🔄 Working on image: $IMAGE"
+
+            # Try to pull the latest image if it exists (safe fallback)
+            echo "📥 Pulling latest for $IMAGE (if exists)..."
+            docker pull $IMAGE_BASE/$IMAGE:latest || echo "⚠️ No latest image found for $IMAGE"
+
+            echo "🧹 Cleaning up tags for $IMAGE..."
+            TAGS=$(gcloud artifacts docker tags list $IMAGE_BASE/$IMAGE --format="value(tag)" --sort-by="~createTime")
+
+            for TAG in $TAGS; do
+              if [[ ! " ${KEEP_TAGS[*]} " =~ (^|[[:space:]])$TAG($|[[:space:]]) ]]; then
+                echo "❌ Deleting tag: $TAG for $IMAGE"
+                gcloud artifacts docker tags delete $IMAGE_BASE/$IMAGE:$TAG --quiet
+              fi
+            done
+
+            echo "🧼 Deleting untagged digests for $IMAGE..."
+            UNTAGGED_IMAGES=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
+              --filter="NOT tags:*" --format="value(digest)")
+
+            for DIGEST in $UNTAGGED_IMAGES; do
+              echo "❌ Deleting untagged image: $DIGEST"
+              gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags
+            done
+
+            echo "✅ Done with $IMAGE"
+            echo ""
+          done
+
+      - name: Retag pulled latest as 'previous'
+        run: |
+          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
+            if docker image inspect $IMAGE_BASE/$IMAGE:latest > /dev/null 2>&1; then
+              echo "Tagging $IMAGE:latest as $IMAGE:previous"
+              docker tag $IMAGE_BASE/$IMAGE:latest $IMAGE_BASE/$IMAGE:previous
+              docker push $IMAGE_BASE/$IMAGE:previous
+            else
+              echo "❌ Skipping: $IMAGE:latest not found locally"
+            fi
+          done
+
+      - name: Push all built images
+        run: |
+          for IMAGE in ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
+            echo "Pushing $IMAGE:latest and :$COMMIT_TAG"
+            docker push $IMAGE_BASE/$IMAGE:latest
+            docker push $IMAGE_BASE/$IMAGE:$COMMIT_TAG
+          done
+      
+
+
+      
+
+
+
+
+
+
+
+
+
+
+
+
+      - name: Build and Push container images from docker-compose (overwrrite latest)
+        run: |
+          docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE . --build-arg CMD="npm start"
+          docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE . --build-arg CMD="node all-workers.js"
+          
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE
+          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE
+          
+      - name: Check cloud run existence
+        id: check-run
+        run: |
+          if gcloud run services decribe $CLOUD_RUN --region=$REGION --platform=managed; then
+            echo "exists=true" >> $GITHUB_output
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy APP to cloud run
+        if: steps.check-run.outputs.exists == 'true'
+        run:
+          gcloud run deploy $APP_IMAGE \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE \
+            --region=$REGION \
+            --platform=managed \
+            --set-env-vars="NODE_ENV=production,PORT=8080"\
+            --allow-unauthenticated \
+            --quiet
+
+      - name: Deploy Workers to cloud run
+        if: steps.check-run.outputs.exists == 'true'
+        run:
+          gcloud run deploy $WORKER_IMAGE \
+            --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE \
+            --region=$REGION \
+            --platform=managed \
+            --set-env-vars="NODE_ENV=production,PORT=8080"\
+            --allow-unauthenticated \
+            --quiet
+
+   
+

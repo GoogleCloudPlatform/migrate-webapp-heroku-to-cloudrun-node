@@ -67,20 +67,9 @@ jobs:
             docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$COMMIT_TAG . \
               --build-arg CMD="$CMD_ARG"
           done
-
-      - name: Pull and retag previous latest as 'previous'
-        continue-on-error: true
-        run: |
-          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
-            if docker pull $IMAGE_BASE/$IMAGE:latest; then
-              docker tag $IMAGE_BASE/$IMAGE:latest $IMAGE_BASE/$IMAGE:previous
-              docker push $IMAGE_BASE/$IMAGE:previous
-            else
-              echo "No previous image found for $IMAGE, skipping tagging as previous"
-            fi
-          done     
-
       
+      # Pull the active "latest" from the repository and then delete all images
+      # In the nest step, we will retag the pulled "latest" to "previous"
       - name: Cleanup old images in Artifact Registry
         run: |
           IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
@@ -123,7 +112,17 @@ jobs:
             fi
           done
 
-
+      - name: Pull and retag previous latest as 'previous'
+        continue-on-error: true
+        run: |
+          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
+            if docker pull $IMAGE_BASE/$IMAGE:latest; then
+              docker tag $IMAGE_BASE/$IMAGE:latest $IMAGE_BASE/$IMAGE:previous
+              docker push $IMAGE_BASE/$IMAGE:previous
+            else
+              echo "No previous image found for $IMAGE, skipping tagging as previous"
+            fi
+          done
 
       - name: Push all built images
         run: |

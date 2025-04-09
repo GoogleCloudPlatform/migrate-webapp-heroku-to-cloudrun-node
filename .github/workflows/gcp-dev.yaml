@@ -130,7 +130,7 @@ jobs:
 
       - name: Push all built images
         run: |
-          for IMAGE in ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
+          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
             echo "Pushing $IMAGE:latest and :$COMMIT_TAG"
             docker push $IMAGE_BASE/$IMAGE:latest
             docker push $IMAGE_BASE/$IMAGE:$COMMIT_TAG

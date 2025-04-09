@@ -1,62 +1,64 @@
 name: Build & Deploy to Cloud Run
 
+# Trigger workflow on any push to the 'migrate-gcp-heroku' branch
 on:
   push:
     branches:
       - migrate-gcp-heroku
 
 env:
+  # Constructs the base path for container images in Artifact Registry
   IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
-  # The COMMIT_TAG (which is the Git commit SHA) provides traceability between your code and deployed images. 
+  # Stores the commit SHA for image traceability 
   COMMIT_TAG: ${{ github.sha }}
 
 jobs:
+  ######################################################
+  # JOB 1: Build the images and deploy them to Artifact Registry repository.
+  ######################################################
   build-and-push:
     # if: false 
     runs-on: ubuntu-22.04
     environment: gcp-dev
 
+    # Request necessary permissions for the job
     permissions:
-      id-token: write
-      contents: read
+      id-token: write   # Needed for Workload Identity Federation
+      contents: read    # Access to the AR repository code
 
     steps:
+      # Step 1: Get the code from the repository
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Step 2: Debug step to show current directory and files
       - name: List directory contents
         run: |
           pwd
           ls -la
-
+      
+      # Step 3: Authenticate to GCP using Workload Identity Federation
       - name: Authenticate to Google Cloud with WIF
         uses: google-github-actions/auth@v1
         with:
           workload_identity_provider: ${{secrets.WIF_PROVIDER}}
           service_account: ${{secrets.SERVICE_ACCOUNT}}
 
+      # Step 4: Set up the gcloud CLI tools for later GCP operations
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v1
     
+      # Step 5: Configure Docker to use Google Artifact Registry for pushing images
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ secrets.ARTIFACT_DOMAIN }}
 
-      # Generate timestamp for image tagging
+      # Step 6: Generate a timestamp for tagging images
       - name: Generate timestamp tag
         id: timestamp
         run: echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
       
-      # We will need this in the Deploy job later
-      - name: Save timestamp to file
-        run: echo "${{ steps.timestamp.outputs.TIMESTAMP }}" > timestamp.txt
-
-      - name: Upload timestamp artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: deploy-timestamp
-          path: timestamp.txt
       
-      # Delete all existing images
+      # Step 7: Clean up by deleting all previously existing images in Artifact Registry
       - name: Delete all existing images
         run: |
           IMAGES=("${{ vars.IGNITEDAPI }}" "${{ vars.IGNITEDAPI_WORKERS }}" "${{ vars.IGNITEDAPI_SCHEDULER }}" "${{ vars.IGNITED_CHAT_STAGING }}")
@@ -64,8 +66,10 @@ jobs:
           for IMAGE in "${IMAGES[@]}"; do
             echo "Deleting all existing images for $IMAGE..."
             
+            # Check if the repository exists before trying to delete images
             if gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
-              # List all existing digests
+
+              # Get a list of all image digests to delete
               DIGESTS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --format="value(DIGEST)" 2>/dev/null || echo "")
               
               if [ -n "$DIGESTS" ]; then
@@ -83,12 +87,13 @@ jobs:
             fi
           done
       
-      # Build new images with appropriate CMD commands and timestamp tag
+      # Step 8: Build new Docker images with specific commands for each service
       - name: Build new images
         run: |
           TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
           echo "Building images with timestamp tag: $TIMESTAMP"
           
+          # Define the CMD instructions for each container using an associative array
           declare -A IMAGE_CMDS=(
             ["${{ vars.IGNITEDAPI }}"]='["npm", "start"]'
             ["${{ vars.IGNITEDAPI_SCHEDULER }}"]='["npm", "workers/scheduled/poc-warning.js"]'
@@ -96,6 +101,7 @@ jobs:
             ["${{ vars.IGNITED_CHAT_STAGING }}"]='["npm", "start"]'
           )
 
+          # Build each image with its specific CMD and both 'latest' and timestamp tags
           for IMAGE in "${!IMAGE_CMDS[@]}"; do
             CMD_ARG=${IMAGE_CMDS[$IMAGE]}
             echo "Building $IMAGE with CMD: $CMD_ARG and tag: $TIMESTAMP"
@@ -103,7 +109,7 @@ jobs:
               --build-arg CMD="$CMD_ARG"
           done
 
-      # Push new images
+      # Step 9: Push all the newly built images to Google Artifact Registry repository
       - name: Push new images
         run: |
           TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
@@ -113,8 +119,11 @@ jobs:
             docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP
           done
 
-
+  ######################################################
+  # JOB 2: Second job that depends on the first job completing
+  ######################################################
   deploy:
+    # if: false 
     runs-on: ubuntu-22.04
     needs: build-and-push
     environment: gcp-dev
@@ -136,6 +145,7 @@ jobs:
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v1
 
+      # Deploy each service to Cloud Run
       - name: Deploy to Cloud Run
         continue-on-error: true
         run: |
@@ -175,6 +185,7 @@ jobs:
           done
 
   finish:
+    # if: false 
     name: Finalize Workflow
     runs-on: ubuntu-22.04
     needs: deploy

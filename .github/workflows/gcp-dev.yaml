@@ -119,7 +119,7 @@ jobs:
             done
 
             echo "✅ Done with $IMAGE"
-            echo ""
+            echo "Cool!"
           done
 
       - name: Retag pulled latest as 'previous'

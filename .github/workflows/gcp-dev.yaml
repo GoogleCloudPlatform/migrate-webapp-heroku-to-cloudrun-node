@@ -82,7 +82,7 @@ jobs:
             CMD_ARG=${IMAGE_CMDS[$IMAGE]}
             echo "Building $IMAGE with CMD: $CMD_ARG"
             docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$COMMIT_TAG . \
-             -f ./Dockerfile .  --build-arg CMD="$CMD_ARG"
+              --build-arg CMD="$CMD_ARG"
           done
       
       # Pull the active "latest" from the repository and then delete all images

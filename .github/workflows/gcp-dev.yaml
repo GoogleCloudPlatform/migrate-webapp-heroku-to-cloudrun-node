@@ -17,6 +17,7 @@ env:
 
 jobs:
   build-and-push:
+    if: false 
     runs-on: ubuntu-22.04
     environment: gcp-dev
 
@@ -120,7 +121,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-22.04
-    needs: build-and-push
+    # needs: build-and-push
     environment: gcp-dev
 
     permissions:
@@ -151,24 +152,45 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
+          export REGION="${{ secrets.REGION }}"
+          export IMAGE_BASE="${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
+          export TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
 
+          IMAGES=(
+            "${{ secrets.IGNITEDAPI }}"
+            "${{ secrets.IGNITEDAPI_WORKERS }}"
+            "${{ secrets.IGNITEDAPI_SCHEDULER }}"
+            "${{ secrets.IGNITED_CHAT_STAGING }}"
+          )
+          
           SERVICES=(
             "${{ secrets.IGNITEDAPI_SERVICE }}"
-            "${{ secrets.IGNITEDAPI_SCHEDULER_SERVICE }}"
             "${{ secrets.IGNITEDAPI_WORKERS_SERVICE }}"
+            "${{ secrets.IGNITEDAPI_SCHEDULER_SERVICE }}"
             "${{ secrets.IGNITED_CHAT_STAGING_SERVICE }}"
           )
 
-          for SERVICE in "${SERVICES[@]}"; do
+          for i in "${!SERVICES[@]}"; do
+            SERVICE="${SERVICES[$i]}"
+            IMAGE="${IMAGES[$i]}"
 
             echo "Checking if service $SERVICE exists..."
-            if gcloud run services describe "$SERVICE" --region=${{ secrets.REGION }} --platform=managed &>/dev/null; then
-
-              echo "Service $SERVICE exists. Deploying..."
+            if gcloud run services describe "$SERVICE" --region="$REGION" --platform=managed &>/dev/null; then
+              echo "Service $SERVICE exists. Deploying image $IMAGE..."
               gcloud run services update "$SERVICE" \
-                --image=$IMAGE_BASE/$SERVICE:$TIMESTAMP \
+                --image="$IMAGE_BASE/$IMAGE:$TIMESTAMP" \
+                --region="$REGION" \
+                --platform=managed \
                 --quiet
             else
               echo "Service $SERVICE does not exist, skipping..."
             fi
           done
+
+  finish:
+    name: Finalize Workflow
+    runs-on: ubuntu-22.04
+    needs: deploy
+    steps:
+      - name: Workflow Complete
+        run: echo "✅ Build and Deploy workflow completed successfully!"

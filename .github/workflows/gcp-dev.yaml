@@ -33,6 +33,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: List directory contents
+        run: |
+          pwd
+          ls -la
+
       - name: Authenticate to Google Cloud with WIF
         uses: google-github-actions/auth@v1
         with:
@@ -64,6 +69,7 @@ jobs:
           echo "IMAGE_BASE from the Secrets variable = "
           echo "IMAGE_BASE=${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
           echo $IMAGE_BASE
+          ls -l
 
           declare -A IMAGE_CMDS=(
             ["${{ secrets.IGNITEDAPI }}"]='["npm", "start"]'
@@ -76,7 +82,7 @@ jobs:
             CMD_ARG=${IMAGE_CMDS[$IMAGE]}
             echo "Building $IMAGE with CMD: $CMD_ARG"
             docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$COMMIT_TAG . \
-              --build-arg CMD="$CMD_ARG"
+             -f ./Dockerfile .  --build-arg CMD="$CMD_ARG"
           done
       
       # Pull the active "latest" from the repository and then delete all images

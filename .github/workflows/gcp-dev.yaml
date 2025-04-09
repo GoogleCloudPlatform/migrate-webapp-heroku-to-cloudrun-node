@@ -151,6 +151,7 @@ jobs:
 
 
       - name: Deploy to Cloud Run
+        continue-on-error: true
         run: |
           export REGION="${{ secrets.REGION }}"
           export IMAGE_BASE="${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"

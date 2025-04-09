@@ -141,15 +141,6 @@ jobs:
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v1
 
-      #- name: Download timestamp artifact
-      #  uses: actions/download-artifact@v4
-      #  with:
-      #    name: deploy-timestamp
-
-      #- name: Read timestamp into environment
-      #  run: echo "TIMESTAMP=$(cat timestamp.txt)" >> $GITHUB_ENV
-
-
       - name: Deploy to Cloud Run
         continue-on-error: true
         run: |
@@ -158,17 +149,17 @@ jobs:
           # export TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
 
           IMAGES=(
-            "${{ secrets.IGNITEDAPI }}"
-            "${{ secrets.IGNITEDAPI_WORKERS }}"
-            "${{ secrets.IGNITEDAPI_SCHEDULER }}"
-            "${{ secrets.IGNITED_CHAT_STAGING }}"
+            "${{ env.IGNITEDAPI }}"
+            "${{ env.IGNITEDAPI_WORKERS }}"
+            "${{ env.IGNITEDAPI_SCHEDULER }}"
+            "${{ env.IGNITED_CHAT_STAGING }}"
           )
           
           SERVICES=(
-            "${{ secrets.IGNITEDAPI_SERVICE }}"
-            "${{ secrets.IGNITEDAPI_WORKERS_SERVICE }}"
-            "${{ secrets.IGNITEDAPI_SCHEDULER_SERVICE }}"
-            "${{ secrets.IGNITED_CHAT_STAGING_SERVICE }}"
+            "${{ env.IGNITEDAPI_SERVICE }}"
+            "${{ env.IGNITEDAPI_WORKERS_SERVICE }}"
+            "${{ env.IGNITEDAPI_SCHEDULER_SERVICE }}"
+            "${{ env.IGNITED_CHAT_STAGING_SERVICE }}"
           )
 
           for i in "${!SERVICES[@]}"; do

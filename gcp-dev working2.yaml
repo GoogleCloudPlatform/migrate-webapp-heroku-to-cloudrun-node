@@ -1,0 +1,137 @@
+name: Build & Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - migrate-gcp-heroku
+
+env:
+  PROJECT_ID: ${{ secrets.PROJECT_ID }}
+  REGION: ${{ secrets.REGION }}
+  REPO_NAME: ${{github.repository}} # Github Repository
+  REPO: ${{ secrets.REPO }} # Artifact Registry Repositiry 
+
+  IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
+  # The COMMIT_TAG (which is the Git commit SHA) provides traceability between your code and deployed images. Benefits include:
+  # You can determine exactly which code version is running in production
+  COMMIT_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-22.04
+    environment: gcp-dev
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: List directory contents
+        run: |
+          pwd
+          ls -la
+
+      - name: Authenticate to Google Cloud with WIF
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{secrets.WIF_PROVIDER}}
+          service_account: ${{secrets.SERVICE_ACCOUNT}}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v1
+    
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ secrets.ARTIFACT_DOMAIN }}
+          
+      # Build four different Docker images with the same codebase but different commands to run when the container starts.
+      - name: Build and tag all FOUR images with respective CMDs commands
+        run: |
+          declare -A IMAGE_CMDS=(
+            ["${{ secrets.IGNITEDAPI }}"]='["npm", "start"]'
+            ["${{ secrets.IGNITEDAPI_SCHEDULER }}"]='["npm", "workers/scheduled/poc-warning.js"]'
+            ["${{ secrets.IGNITEDAPI_WORKERS }}"]='["node", "all-workers.js"]'
+            ["${{ secrets.IGNITED_CHAT_STAGING }}"]='["npm", "start"]'
+          )
+
+          for IMAGE in "${!IMAGE_CMDS[@]}"; do
+            CMD_ARG=${IMAGE_CMDS[$IMAGE]}
+            echo "Building $IMAGE with CMD: $CMD_ARG"
+            docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$COMMIT_TAG . \
+              --build-arg CMD="$CMD_ARG"
+          done
+
+      - name: Pull and retag current latest as 'previous' (if different)
+        continue-on-error: true
+        run: |
+          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
+            echo "Checking $IMAGE..."
+            
+            LATEST_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
+              --format="value(digest)" \
+              --filter="tags:latest" \
+              --sort-by="~updateTime" | head -n1)
+
+            PREVIOUS_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
+              --format="value(digest)" \
+              --filter="tags:previous" \
+              --sort-by="~updateTime" | head -n1)
+
+            if [[ "$LATEST_DIGEST" != "$PREVIOUS_DIGEST" && -n "$LATEST_DIGEST" ]]; then
+              echo "Tagging $LATEST_DIGEST as 'previous' for $IMAGE"
+              docker pull $IMAGE_BASE/$IMAGE@${LATEST_DIGEST}
+              docker tag $IMAGE_BASE/$IMAGE@${LATEST_DIGEST} $IMAGE_BASE/$IMAGE:previous
+              docker push $IMAGE_BASE/$IMAGE:previous
+            else
+              echo "Skipping retag for $IMAGE — 'latest' and 'previous' point to same digest or latest not found."
+            fi
+          done    
+
+      
+      - name: Cleanup old images in Artifact Registry
+        run: |
+          IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
+          for IMAGE in "${IMAGES[@]}"; do
+            echo "Cleaning up old images for $IMAGE..."
+            
+            # Check if repository exists
+            if gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
+              
+              # Get all image digests and their tags
+              echo "Listing all versions of $IMAGE..."
+              
+              # Get the digest of current 'latest' to protect it
+              LATEST_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:latest --format="value(DIGEST)" 2>/dev/null || echo "")
+              PREVIOUS_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:previous --format="value(DIGEST)" 2>/dev/null || echo "")
+              CURRENT_COMMIT_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:$COMMIT_TAG --format="value(DIGEST)" 2>/dev/null || echo "")
+              
+              echo "Protected digests: LATEST=$LATEST_DIGEST, PREVIOUS=$PREVIOUS_DIGEST, CURRENT=$CURRENT_COMMIT_DIGEST"
+              
+              # List all images and filter out the protected ones
+              ALL_DIGESTS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --format="value(DIGEST)" 2>/dev/null || echo "")
+              
+              for DIGEST in $ALL_DIGESTS; do
+                if [[ "$DIGEST" != "$LATEST_DIGEST" && "$DIGEST" != "$PREVIOUS_DIGEST" && "$DIGEST" != "$CURRENT_COMMIT_DIGEST" ]]; then
+                  echo "Deleting image with digest $DIGEST for $IMAGE"
+                  gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags || echo "Failed to delete image with digest $DIGEST"
+                else
+                  echo "Keeping protected image with digest $DIGEST"
+                fi
+              done
+              
+            else
+              echo "Repository ${{ secrets.REPO }} does not exist yet or is not accessible, skipping cleanup for $IMAGE"
+            fi
+          done
+
+
+
+      - name: Push all built images
+        run: |
+          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
+            echo "Pushing $IMAGE:latest and :$COMMIT_TAG"
+            docker push $IMAGE_BASE/$IMAGE:latest
+            docker push $IMAGE_BASE/$IMAGE:$COMMIT_TAG
+          done

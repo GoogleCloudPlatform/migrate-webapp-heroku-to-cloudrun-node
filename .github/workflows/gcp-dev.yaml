@@ -46,9 +46,19 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ secrets.ARTIFACT_DOMAIN }}
           
-      # Build four different Docker images with the same codebase but different commands to run when the container starts.
-      - name: Build and tag all FOUR images with respective CMDs commands
+      
+
+      # Generate timestamp for image tagging
+      - name: Generate timestamp tag
+        id: timestamp
+        run: echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
+      
+      # Build new images with appropriate CMD commands and timestamp tag
+      - name: Build new images with timestamp
         run: |
+          TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
+          echo "Building images with timestamp tag: $TIMESTAMP"
+          
           declare -A IMAGE_CMDS=(
             ["${{ secrets.IGNITEDAPI }}"]='["npm", "start"]'
             ["${{ secrets.IGNITEDAPI_SCHEDULER }}"]='["npm", "workers/scheduled/poc-warning.js"]'
@@ -58,80 +68,54 @@ jobs:
 
           for IMAGE in "${!IMAGE_CMDS[@]}"; do
             CMD_ARG=${IMAGE_CMDS[$IMAGE]}
-            echo "Building $IMAGE with CMD: $CMD_ARG"
-            docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$COMMIT_TAG . \
+            echo "Building $IMAGE with CMD: $CMD_ARG and tag: $TIMESTAMP"
+            docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$TIMESTAMP . \
               --build-arg CMD="$CMD_ARG"
           done
 
-      - name: Pull and retag current latest as 'previous' (if different)
-        continue-on-error: true
+      # Delete all old images except the latest in the AR
+      - name: Cleanup old images
         run: |
-          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
-            echo "Checking $IMAGE..."
-            
-            LATEST_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
-              --format="value(digest)" \
-              --filter="tags:latest" \
-              --sort-by="~updateTime" | head -n1)
-
-            PREVIOUS_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
-              --format="value(digest)" \
-              --filter="tags:previous" \
-              --sort-by="~updateTime" | head -n1)
-
-            if [[ "$LATEST_DIGEST" != "$PREVIOUS_DIGEST" && -n "$LATEST_DIGEST" ]]; then
-              echo "Tagging $LATEST_DIGEST as 'previous' for $IMAGE"
-              docker pull $IMAGE_BASE/$IMAGE@${LATEST_DIGEST}
-              docker tag $IMAGE_BASE/$IMAGE@${LATEST_DIGEST} $IMAGE_BASE/$IMAGE:previous
-              docker push $IMAGE_BASE/$IMAGE:previous
-            else
-              echo "Skipping retag for $IMAGE — 'latest' and 'previous' point to same digest or latest not found."
-            fi
-          done    
-
-      
-      - name: Cleanup old images in Artifact Registry
-        run: |
+          TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
           IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
+          
           for IMAGE in "${IMAGES[@]}"; do
             echo "Cleaning up old images for $IMAGE..."
             
-            # Check if repository exists
             if gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
+              # Get the digest of our new image to protect it
+              NEW_IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE_BASE/$IMAGE:$TIMESTAMP 2>/dev/null | cut -d'@' -f2 || echo "")
               
-              # Get all image digests and their tags
-              echo "Listing all versions of $IMAGE..."
+              if [ -z "$NEW_IMAGE_DIGEST" ]; then
+                echo "Warning: Could not determine digest for new image. Skipping cleanup to avoid deleting the wrong images."
+                continue
+              fi
               
-              # Get the digest of current 'latest' to protect it
-              LATEST_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:latest --format="value(DIGEST)" 2>/dev/null || echo "")
-              PREVIOUS_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:previous --format="value(DIGEST)" 2>/dev/null || echo "")
-              CURRENT_COMMIT_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:$COMMIT_TAG --format="value(DIGEST)" 2>/dev/null || echo "")
+              echo "New image digest (protected): $NEW_IMAGE_DIGEST"
               
-              echo "Protected digests: LATEST=$LATEST_DIGEST, PREVIOUS=$PREVIOUS_DIGEST, CURRENT=$CURRENT_COMMIT_DIGEST"
-              
-              # List all images and filter out the protected ones
+              # List all existing image digests in the registry
               ALL_DIGESTS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --format="value(DIGEST)" 2>/dev/null || echo "")
               
+              # Delete all digests except our new one
               for DIGEST in $ALL_DIGESTS; do
-                if [[ "$DIGEST" != "$LATEST_DIGEST" && "$DIGEST" != "$PREVIOUS_DIGEST" && "$DIGEST" != "$CURRENT_COMMIT_DIGEST" ]]; then
-                  echo "Deleting image with digest $DIGEST for $IMAGE"
+                if [ "$DIGEST" != "$NEW_IMAGE_DIGEST" ]; then
+                  echo "Deleting old image with digest $DIGEST"
                   gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags || echo "Failed to delete image with digest $DIGEST"
                 else
-                  echo "Keeping protected image with digest $DIGEST"
+                  echo "Keeping new image with digest $DIGEST"
                 fi
               done
-              
             else
-              echo "Repository ${{ secrets.REPO }} does not exist yet or is not accessible, skipping cleanup for $IMAGE"
+              echo "Repository ${{ secrets.REPO }} doesn't exist yet, skipping cleanup"
             fi
           done
 
-
-
+      # Push all built images with both latest and timestamp tags
       - name: Push all built images
         run: |
+          TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
           for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
-            echo "Pushing $IMAGE:latest and :$COMMIT_TAG"
+            echo "Pushing $IMAGE:latest and $IMAGE:$TIMESTAMP"
             docker push $IMAGE_BASE/$IMAGE:latest
-            docker push $IMAGE_BASE/$IMAGE:$COMMIT_TAG
+            docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP
           done

@@ -149,17 +149,17 @@ jobs:
           # export TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
 
           IMAGES=(
-            "${{ env.IGNITEDAPI }}"
-            "${{ env.IGNITEDAPI_WORKERS }}"
-            "${{ env.IGNITEDAPI_SCHEDULER }}"
-            "${{ env.IGNITED_CHAT_STAGING }}"
+            "${{ vars.IGNITEDAPI }}"
+            "${{ vars.IGNITEDAPI_WORKERS }}"
+            "${{ vars.IGNITEDAPI_SCHEDULER }}"
+            "${{ vars.IGNITED_CHAT_STAGING }}"
           )
           
           SERVICES=(
-            "${{ env.IGNITEDAPI_SERVICE }}"
-            "${{ env.IGNITEDAPI_WORKERS_SERVICE }}"
-            "${{ env.IGNITEDAPI_SCHEDULER_SERVICE }}"
-            "${{ env.IGNITED_CHAT_STAGING_SERVICE }}"
+            "${{ vars.IGNITEDAPI_SERVICE }}"
+            "${{ vars.IGNITEDAPI_WORKERS_SERVICE }}"
+            "${{ vars.IGNITEDAPI_SCHEDULER_SERVICE }}"
+            "${{ vars.IGNITED_CHAT_STAGING_SERVICE }}"
           )
 
           for i in "${!SERVICES[@]}"; do

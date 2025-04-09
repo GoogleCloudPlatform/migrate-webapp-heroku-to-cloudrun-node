@@ -6,18 +6,13 @@ on:
       - migrate-gcp-heroku
 
 env:
-  #PROJECT_ID: ${{ secrets.PROJECT_ID }}
-  #REGION: ${{ secrets.REGION }}
-  #REPO_NAME: ${{github.repository}}   # Github Repository
-  #REPO: ${{ secrets.REPO }}           # Artifact Registry Repositiry 
-  
   IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
   # The COMMIT_TAG (which is the Git commit SHA) provides traceability between your code and deployed images. 
   COMMIT_TAG: ${{ github.sha }}
 
 jobs:
   build-and-push:
-    if: false 
+    # if: false 
     runs-on: ubuntu-22.04
     environment: gcp-dev
 
@@ -64,7 +59,7 @@ jobs:
       # Delete all existing images
       - name: Delete all existing images
         run: |
-          IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
+          IMAGES=("${{ vars.IGNITEDAPI }}" "${{ vars.IGNITEDAPI_WORKERS }}" "${{ vars.IGNITEDAPI_SCHEDULER }}" "${{ vars.IGNITED_CHAT_STAGING }}")
           
           for IMAGE in "${IMAGES[@]}"; do
             echo "Deleting all existing images for $IMAGE..."
@@ -95,10 +90,10 @@ jobs:
           echo "Building images with timestamp tag: $TIMESTAMP"
           
           declare -A IMAGE_CMDS=(
-            ["${{ secrets.IGNITEDAPI }}"]='["npm", "start"]'
-            ["${{ secrets.IGNITEDAPI_SCHEDULER }}"]='["npm", "workers/scheduled/poc-warning.js"]'
-            ["${{ secrets.IGNITEDAPI_WORKERS }}"]='["node", "all-workers.js"]'
-            ["${{ secrets.IGNITED_CHAT_STAGING }}"]='["npm", "start"]'
+            ["${{ vars.IGNITEDAPI }}"]='["npm", "start"]'
+            ["${{ vars.IGNITEDAPI_SCHEDULER }}"]='["npm", "workers/scheduled/poc-warning.js"]'
+            ["${{ vars.IGNITEDAPI_WORKERS }}"]='["node", "all-workers.js"]'
+            ["${{ vars.IGNITED_CHAT_STAGING }}"]='["npm", "start"]'
           )
 
           for IMAGE in "${!IMAGE_CMDS[@]}"; do
@@ -112,7 +107,7 @@ jobs:
       - name: Push new images
         run: |
           TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
-          for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
+          for IMAGE in ${{ vars.IGNITEDAPI }} ${{ vars.IGNITEDAPI_WORKERS }} ${{ vars.IGNITEDAPI_SCHEDULER }} ${{ vars.IGNITED_CHAT_STAGING }}; do
             echo "Pushing $IMAGE:latest and $IMAGE:$TIMESTAMP"
             docker push $IMAGE_BASE/$IMAGE:latest
             docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP
@@ -121,7 +116,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-22.04
-    # needs: build-and-push
+    needs: build-and-push
     environment: gcp-dev
 
     permissions:

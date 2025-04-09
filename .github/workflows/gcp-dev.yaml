@@ -6,10 +6,11 @@ on:
       - migrate-gcp-heroku
 
 env:
-  PROJECT_ID: ${{ secrets.PROJECT_ID }}
-  REGION: ${{ secrets.REGION }}
-  REPO_NAME: ${{github.repository}}   # Github Repository
-  REPO: ${{ secrets.REPO }}           # Artifact Registry Repositiry 
+  #PROJECT_ID: ${{ secrets.PROJECT_ID }}
+  #REGION: ${{ secrets.REGION }}
+  #REPO_NAME: ${{github.repository}}   # Github Repository
+  #REPO: ${{ secrets.REPO }}           # Artifact Registry Repositiry 
+  
   IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
   # The COMMIT_TAG (which is the Git commit SHA) provides traceability between your code and deployed images. 
   COMMIT_TAG: ${{ github.sha }}
@@ -159,10 +160,12 @@ jobs:
           )
 
           for SERVICE in "${SERVICES[@]}"; do
+
             echo "Checking if service $SERVICE exists..."
-            if gcloud run services describe "$SERVICE" --region=$REGION --platform=managed &>/dev/null; then
+            if gcloud run services describe "$SERVICE" --region=${{ secrets.REGION }} --platform=managed &>/dev/null; then
+
               echo "Service $SERVICE exists. Deploying..."
-                gcloud run services update "$SERVICE" \
+              gcloud run services update "$SERVICE" \
                 --image=$IMAGE_BASE/$SERVICE:$TIMESTAMP \
                 --quiet
             else

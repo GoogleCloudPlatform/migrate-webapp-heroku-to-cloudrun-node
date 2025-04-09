@@ -1,41 +1,58 @@
 version: '3.8'
 
 services:
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/web
-    command: ["npm", "start"]
-
-workers:
-  build:
-    context: .
-    dockerfile: Dockerfile
-  image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/workers
-  command: ["node", "all-workers.js"]
-#################
-
-version: '3.8'
-
-services:
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/ignitedapi_dev
-    command: ["npm", "start"]
-
-  workers:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: us-central1-docker.pkg.dev/provarity-devtest/prov-ar-dev-212-artifactregistry-1/ignitedapi_dev
-    command: ["node", "all-workers.js"]
-
-  ignitedapi_scheduler:
+  ignited-api:
     build:
       context: .
       args:
-        CMD: node workers/scheduled/poc-warning.js
-    image: ignitedapi-scheduler
+        CMD: '["npm", "start"]'
+    image: ignited-api:local
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+    command: ["npm", "start"]
+
+  ignited-workers:
+    build:
+      context: .
+      args:
+        CMD: '["node", "all-workers.js"]'
+    image: ignited-workers:local
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+    command: ["node", "all-workers.js"]
+
+  ignited-scheduler:
+    build:
+      context: .
+      args:
+        CMD: '["npm", "workers/scheduled/poc-warning.js"]'
+    image: ignited-scheduler:local
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+    command: ["npm", "workers/scheduled/poc-warning.js"]
+
+  ignited-chat:
+    build:
+      context: .
+      args:
+        CMD: '["npm", "start"]'
+    image: ignited-chat:local
+    ports:
+      - "3001:3000"
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+    command: ["npm", "start"]

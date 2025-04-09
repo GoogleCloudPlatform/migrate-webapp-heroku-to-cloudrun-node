@@ -8,8 +8,9 @@ on:
 env:
   PROJECT_ID: ${{ secrets.PROJECT_ID }}
   REGION: ${{ secrets.REGION }}
-  REPO_NAME: ${{github.repository}}   # Github Repository
-  REPO: ${{ secrets.REPO }}           # Artifact Registry Repositiry 
+  REPO_NAME: ${{github.repository}} # Github Repository
+  REPO: ${{ secrets.REPO }} # Artifact Registry Repositiry 
+
   IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
   # The COMMIT_TAG (which is the Git commit SHA) provides traceability between your code and deployed images. 
   COMMIT_TAG: ${{ github.sha }}
@@ -48,16 +49,6 @@ jobs:
       - name: Generate timestamp tag
         id: timestamp
         run: echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
-      
-      # We will need this in the Deploy job later
-      - name: Save timestamp to file
-        run: echo "${{ steps.timestamp.outputs.TIMESTAMP }}" > timestamp.txt
-
-      - name: Upload timestamp artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: deploy-timestamp
-          path: timestamp.txt
       
       # Delete all existing images
       - name: Delete all existing images
@@ -114,58 +105,4 @@ jobs:
             echo "Pushing $IMAGE:latest and $IMAGE:$TIMESTAMP"
             docker push $IMAGE_BASE/$IMAGE:latest
             docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP
-          done
-
-
-  deploy:
-    runs-on: ubuntu-22.04
-    needs: build-and-push
-    environment: gcp-dev
-
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud with WIF
-        uses: google-github-actions/auth@v1
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.SERVICE_ACCOUNT }}
-
-      - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v1
-
-      - name: Download timestamp artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: deploy-timestamp
-
-      - name: Read timestamp into environment
-        run: echo "TIMESTAMP=$(cat timestamp.txt)" >> $GITHUB_ENV
-
-
-      - name: Deploy to Cloud Run
-        run: |
-
-          SERVICES=(
-            "${{ secrets.IGNITEDAPI_SERVICE }}"
-            "${{ secrets.IGNITEDAPI_SCHEDULER_SERVICE }}"
-            "${{ secrets.IGNITEDAPI_WORKERS_SERVICE }}"
-            "${{ secrets.IGNITED_CHAT_STAGING_SERVICE }}"
-          )
-
-          for SERVICE in "${SERVICES[@]}"; do
-            echo "Checking if service $SERVICE exists..."
-            if gcloud run services describe "$SERVICE" --region=$REGION --platform=managed &>/dev/null; then
-              echo "Service $SERVICE exists. Deploying..."
-                gcloud run services update "$SERVICE" \
-                --image=$IMAGE_BASE/$SERVICE:$TIMESTAMP \
-                --quiet
-            else
-              echo "Service $SERVICE does not exist, skipping..."
-            fi
           done

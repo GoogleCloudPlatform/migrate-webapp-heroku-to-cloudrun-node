@@ -6,16 +6,9 @@ on:
       - migrate-gcp-heroku
 
 env:
-  PROJECT_ID: provarity-dev-test
+  PROJECT_ID: provarity-devtest
   REGION: us-central1
   REPO_NAME: ${{github.repository}}
-  ARTIFACT_DOMAIN: us-central1-docker.pkg.dev
-  SERVICE_ACCOUNT: github-action-dev@provarity-devtest.iam.gserviceaccount.com
-  WIF_PROVIDER: /projects/471809734182/locations/global/workloadIdentityPools/github-identity-pool/providers/github-actions-provider
-  CLOUD_RUN: run4-dev-220-cloudrun-1
-  APP_IMAGE: app
-  WORKER_IMAGE: workers
-  
 
   IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
   COMMIT_TAG: ${{ github.sha }}

@@ -47,11 +47,6 @@ jobs:
         run: gcloud auth configure-docker ${{ secrets.ARTIFACT_DOMAIN }}
           
       # Build four different Docker images with the same codebase but different commands to run when the container starts.
-      # Each image should have a different CMD command, as follows:
-      # - IGNITEDAPI should have command: ["npm", "start"]
-      # - IGNITEDAPI_SCHEDULER  should have command: ["npm", "workers/scheduled/poc-warning.js"]
-      # - IGNITEDAPI_WORKERS should have command:  ["node", "all-workers.js"]
-      # - IGNITED_CHAT_STAGING  should have command: ["npm", "start"]
       - name: Build and tag all FOUR images with respective CMDs commands
         run: |
           declare -A IMAGE_CMDS=(
@@ -68,56 +63,64 @@ jobs:
               --build-arg CMD="$CMD_ARG"
           done
 
-      - name: Pull and retag previous latest as 'previous'
+      - name: Pull and retag current latest as 'previous' (if different)
         continue-on-error: true
         run: |
           for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
-            if docker pull $IMAGE_BASE/$IMAGE:latest; then
-              docker tag $IMAGE_BASE/$IMAGE:latest $IMAGE_BASE/$IMAGE:previous
+            echo "Checking $IMAGE..."
+            
+            LATEST_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
+              --format="value(digest)" \
+              --filter="tags:latest" \
+              --sort-by="~updateTime" | head -n1)
+
+            PREVIOUS_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
+              --format="value(digest)" \
+              --filter="tags:previous" \
+              --sort-by="~updateTime" | head -n1)
+
+            if [[ "$LATEST_DIGEST" != "$PREVIOUS_DIGEST" && -n "$LATEST_DIGEST" ]]; then
+              echo "Tagging $LATEST_DIGEST as 'previous' for $IMAGE"
+              docker pull $IMAGE_BASE/$IMAGE@${LATEST_DIGEST}
+              docker tag $IMAGE_BASE/$IMAGE@${LATEST_DIGEST} $IMAGE_BASE/$IMAGE:previous
               docker push $IMAGE_BASE/$IMAGE:previous
             else
-              echo "No previous image found for $IMAGE, skipping tagging as previous"
+              echo "Skipping retag for $IMAGE — 'latest' and 'previous' point to same digest or latest not found."
             fi
-          done     
+          done    
 
       
       - name: Cleanup old images in Artifact Registry
         run: |
           IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
           for IMAGE in "${IMAGES[@]}"; do
-            echo "Cleaning up old tags and untagged images for $IMAGE..."
+            echo "Cleaning up old images for $IMAGE..."
             
-            # Check if repository exists before listing tags
+            # Check if repository exists
             if gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
-              # Use 'set +e' to prevent script from failing if no tags are found
-              set +e
-              TAGS=$(gcloud artifacts docker tags list $IMAGE_BASE/$IMAGE --format="value(tag)" --sort-by="~createTime" 2>/dev/null)
-              set -e
-              KEEP_TAGS=("latest" "previous")
               
-              if [ -n "$TAGS" ]; then
-                # Delete all tags except for 'latest' and 'previous'
-                for TAG in $TAGS; do
-                  if [[ ! " ${KEEP_TAGS[*]} " == *" $TAG "* ]]; then
-                    echo "Deleting tag $TAG for $IMAGE"
-                    gcloud artifacts docker tags delete $IMAGE_BASE/$IMAGE:$TAG --quiet || echo "Failed to delete tag $TAG"
-                  fi
-                done
-                
-                # List and delete untagged images
-                UNTAGGED_IMAGES=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --filter="NOT tags:*" --format="value(digest)" 2>/dev/null || echo "")
-                
-                if [ -n "$UNTAGGED_IMAGES" ]; then
-                  for DIGEST in $UNTAGGED_IMAGES; do
-                    echo "Deleting untagged image with digest $DIGEST for $IMAGE"
-                    gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags || echo "Failed to delete digest"
-                  done
+              # Get all image digests and their tags
+              echo "Listing all versions of $IMAGE..."
+              
+              # Get the digest of current 'latest' to protect it
+              LATEST_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:latest --format="value(DIGEST)" 2>/dev/null || echo "")
+              PREVIOUS_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:previous --format="value(DIGEST)" 2>/dev/null || echo "")
+              CURRENT_COMMIT_DIGEST=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE:$COMMIT_TAG --format="value(DIGEST)" 2>/dev/null || echo "")
+              
+              echo "Protected digests: LATEST=$LATEST_DIGEST, PREVIOUS=$PREVIOUS_DIGEST, CURRENT=$CURRENT_COMMIT_DIGEST"
+              
+              # List all images and filter out the protected ones
+              ALL_DIGESTS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --format="value(DIGEST)" 2>/dev/null || echo "")
+              
+              for DIGEST in $ALL_DIGESTS; do
+                if [[ "$DIGEST" != "$LATEST_DIGEST" && "$DIGEST" != "$PREVIOUS_DIGEST" && "$DIGEST" != "$CURRENT_COMMIT_DIGEST" ]]; then
+                  echo "Deleting image with digest $DIGEST for $IMAGE"
+                  gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags || echo "Failed to delete image with digest $DIGEST"
                 else
-                  echo "No untagged images found for $IMAGE"
+                  echo "Keeping protected image with digest $DIGEST"
                 fi
-              else
-                echo "No tags found for $IMAGE, skipping cleanup"
-              fi
+              done
+              
             else
               echo "Repository ${{ secrets.REPO }} does not exist yet or is not accessible, skipping cleanup for $IMAGE"
             fi

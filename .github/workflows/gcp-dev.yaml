@@ -8,7 +8,8 @@ on:
 env:
   PROJECT_ID: provarity-devtest
   REGION: us-central1
-  REPO_NAME: ${{github.repository}}
+  REPO_NAME: ${{github.repository}} # Github Repository
+  REPO: ${{ secrets.REPO }} # Artifact Registry Repositiry 
 
   IMAGE_BASE: ${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}
   COMMIT_TAG: ${{ github.sha }}
@@ -57,13 +58,6 @@ jobs:
       # - IGNITED_CHAT_STAGING  should have command: ["npm", "start"]
       - name: Build and tag all FOUR images with respective CMDs commands
         run: |
-          echo "IMAGE_BASE from the Env variable = "
-          echo $IMAGE_BASE
-          echo "IMAGE_BASE from the Secrets variable = "
-          echo "IMAGE_BASE=${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
-          echo $IMAGE_BASE
-          ls -l
-
           declare -A IMAGE_CMDS=(
             ["${{ secrets.IGNITEDAPI }}"]='["npm", "start"]'
             ["${{ secrets.IGNITEDAPI_SCHEDULER }}"]='["npm", "workers/scheduled/poc-warning.js"]'

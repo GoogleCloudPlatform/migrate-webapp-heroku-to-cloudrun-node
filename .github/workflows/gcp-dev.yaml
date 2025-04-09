@@ -79,23 +79,41 @@ jobs:
           IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
           for IMAGE in "${IMAGES[@]}"; do
             echo "Cleaning up old tags and untagged images for $IMAGE..."
-            TAGS=$(gcloud artifacts docker tags list $IMAGE_BASE/$IMAGE --format="value(tag)" --sort-by="~createTime")
-            KEEP_TAGS=("latest" "previous")
             
-            # Delete all tags except for 'latest' and 'previous'
-            for TAG in $TAGS; do
-              if [[ ! " ${KEEP_TAGS[*]} " == *" $TAG "* ]]; then
-                echo "Deleting tag $TAG for $IMAGE"
-                gcloud artifacts docker tags delete $IMAGE_BASE/$IMAGE:$TAG --quiet
+            # Check if repository exists before listing tags
+            if gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
+              # Use 'set +e' to prevent script from failing if no tags are found
+              set +e
+              TAGS=$(gcloud artifacts docker tags list $IMAGE_BASE/$IMAGE --format="value(tag)" --sort-by="~createTime" 2>/dev/null)
+              set -e
+              KEEP_TAGS=("latest" "previous")
+              
+              if [ -n "$TAGS" ]; then
+                # Delete all tags except for 'latest' and 'previous'
+                for TAG in $TAGS; do
+                  if [[ ! " ${KEEP_TAGS[*]} " == *" $TAG "* ]]; then
+                    echo "Deleting tag $TAG for $IMAGE"
+                    gcloud artifacts docker tags delete $IMAGE_BASE/$IMAGE:$TAG --quiet || echo "Failed to delete tag $TAG"
+                  fi
+                done
+                
+                # List and delete untagged images
+                UNTAGGED_IMAGES=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --filter="NOT tags:*" --format="value(digest)" 2>/dev/null || echo "")
+                
+                if [ -n "$UNTAGGED_IMAGES" ]; then
+                  for DIGEST in $UNTAGGED_IMAGES; do
+                    echo "Deleting untagged image with digest $DIGEST for $IMAGE"
+                    gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags || echo "Failed to delete digest"
+                  done
+                else
+                  echo "No untagged images found for $IMAGE"
+                fi
+              else
+                echo "No tags found for $IMAGE, skipping cleanup"
               fi
-            done
-
-            # List and delete untagged images
-            UNTAGGED_IMAGES=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --filter="NOT tags:*" --format="value(digest)")
-            for DIGEST in $UNTAGGED_IMAGES; do
-              echo "Deleting untagged image with digest $DIGEST for $IMAGE"
-              gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags
-            done
+            else
+              echo "Repository ${{ secrets.REPO }} does not exist yet or is not accessible, skipping cleanup for $IMAGE"
+            fi
           done
 
       - name: Pull and retag previous latest as 'previous'

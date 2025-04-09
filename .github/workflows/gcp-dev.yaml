@@ -6,8 +6,8 @@ on:
       - migrate-gcp-heroku
 
 env:
-  PROJECT_ID: provarity-devtest
-  REGION: us-central1
+  PROJECT_ID: ${{ secrets.PROJECT_ID }}
+  REGION: ${{ secrets.REGION }}
   REPO_NAME: ${{github.repository}} # Github Repository
   REPO: ${{ secrets.REPO }} # Artifact Registry Repositiry 
 
@@ -74,50 +74,39 @@ jobs:
       
       # Pull the active "latest" from the repository and then delete all images
       # In the nest step, we will retag the pulled "latest" to "previous"
-      - name: Pull latest and cleanup old images in Artifact Registry
+      - name: Cleanup old images in Artifact Registry
         run: |
           IMAGES=("${{ secrets.IGNITEDAPI }}" "${{ secrets.IGNITEDAPI_WORKERS }}" "${{ secrets.IGNITEDAPI_SCHEDULER }}" "${{ secrets.IGNITED_CHAT_STAGING }}")
-          KEEP_TAGS=("latest" "previous")
-
           for IMAGE in "${IMAGES[@]}"; do
-            echo "🔄 Working on image: $IMAGE"
-
-            # Try to pull the latest image if it exists (safe fallback)
-            echo "📥 Pulling latest for $IMAGE (if exists)..."
-            docker pull $IMAGE_BASE/$IMAGE:latest || echo "⚠️ No latest image found for $IMAGE"
-
-            echo "🧹 Cleaning up tags for $IMAGE..."
+            echo "Cleaning up old tags and untagged images for $IMAGE..."
             TAGS=$(gcloud artifacts docker tags list $IMAGE_BASE/$IMAGE --format="value(tag)" --sort-by="~createTime")
-
+            KEEP_TAGS=("latest" "previous")
+            
+            # Delete all tags except for 'latest' and 'previous'
             for TAG in $TAGS; do
-              if [[ ! " ${KEEP_TAGS[*]} " =~ (^|[[:space:]])$TAG($|[[:space:]]) ]]; then
-                echo "❌ Deleting tag: $TAG for $IMAGE"
+              if [[ ! " ${KEEP_TAGS[*]} " == *" $TAG "* ]]; then
+                echo "Deleting tag $TAG for $IMAGE"
                 gcloud artifacts docker tags delete $IMAGE_BASE/$IMAGE:$TAG --quiet
               fi
             done
 
-            echo "🧼 Deleting untagged digests for $IMAGE..."
-            UNTAGGED_IMAGES=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
-              --filter="NOT tags:*" --format="value(digest)")
-
+            # List and delete untagged images
+            UNTAGGED_IMAGES=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --filter="NOT tags:*" --format="value(digest)")
             for DIGEST in $UNTAGGED_IMAGES; do
-              echo "❌ Deleting untagged image: $DIGEST"
+              echo "Deleting untagged image with digest $DIGEST for $IMAGE"
               gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags
             done
-
-            echo "✅ Done with $IMAGE"
-            echo "Cool!"
           done
 
-      - name: Retag pulled latest as 'previous'
+      - name: Pull and retag previous latest as 'previous'
+        continue-on-error: true
         run: |
           for IMAGE in ${{ secrets.IGNITEDAPI }} ${{ secrets.IGNITEDAPI_WORKERS }} ${{ secrets.IGNITEDAPI_SCHEDULER }} ${{ secrets.IGNITED_CHAT_STAGING }}; do
-            if docker image inspect $IMAGE_BASE/$IMAGE:latest > /dev/null 2>&1; then
-              echo "Tagging $IMAGE:latest as $IMAGE:previous"
+            if docker pull $IMAGE_BASE/$IMAGE:latest; then
               docker tag $IMAGE_BASE/$IMAGE:latest $IMAGE_BASE/$IMAGE:previous
               docker push $IMAGE_BASE/$IMAGE:previous
             else
-              echo "❌ Skipping: $IMAGE:latest not found locally"
+              echo "No previous image found for $IMAGE, skipping tagging as previous"
             fi
           done
 
@@ -128,60 +117,3 @@ jobs:
             docker push $IMAGE_BASE/$IMAGE:latest
             docker push $IMAGE_BASE/$IMAGE:$COMMIT_TAG
           done
-      
-
-
-      
-
-
-
-
-
-
-
-
-
-
-
-
-      - name: Build and Push container images from docker-compose (overwrrite latest)
-        run: |
-          docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE . --build-arg CMD="npm start"
-          docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE . --build-arg CMD="node all-workers.js"
-          
-          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE
-          docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE
-          
-      - name: Check cloud run existence
-        id: check-run
-        run: |
-          if gcloud run services decribe $CLOUD_RUN --region=$REGION --platform=managed; then
-            echo "exists=true" >> $GITHUB_output
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Deploy APP to cloud run
-        if: steps.check-run.outputs.exists == 'true'
-        run:
-          gcloud run deploy $APP_IMAGE \
-            --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$APP_IMAGE \
-            --region=$REGION \
-            --platform=managed \
-            --set-env-vars="NODE_ENV=production,PORT=8080"\
-            --allow-unauthenticated \
-            --quiet
-
-      - name: Deploy Workers to cloud run
-        if: steps.check-run.outputs.exists == 'true'
-        run:
-          gcloud run deploy $WORKER_IMAGE \
-            --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$WORKER_IMAGE \
-            --region=$REGION \
-            --platform=managed \
-            --set-env-vars="NODE_ENV=production,PORT=8080"\
-            --allow-unauthenticated \
-            --quiet
-
-   
-

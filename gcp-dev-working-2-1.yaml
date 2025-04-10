@@ -161,10 +161,10 @@ jobs:
           )
           
           SERVICES=(
-            "${{ vars.IGNITEDAPI_SERVICE }}"
-            "${{ vars.IGNITEDAPI_WORKERS_SERVICE }}"
-            "${{ vars.IGNITEDAPI_SCHEDULER_SERVICE }}"
-            "${{ vars.IGNITED_CHAT_STAGING_SERVICE }}"
+            "${{ vars.IGNITEDAPI }}"
+            "${{ vars.IGNITEDAPI_WORKERS }}"
+            "${{ vars.IGNITEDAPI_SCHEDULER }}"
+            "${{ vars.IGNITED_CHAT_STAGING }}"
           )
 
           for i in "${!SERVICES[@]}"; do
@@ -184,6 +184,9 @@ jobs:
             fi
           done
 
+  ######################################################
+  # JOB 3: Conclude
+  ######################################################
   finish:
     # if: false 
     name: Finalize Workflow

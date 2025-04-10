@@ -58,40 +58,88 @@ jobs:
         run: echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
       
       
-      # Step 7: Clean up by deleting all previously existing images in Artifact Registry
-      - name: Delete all existing images
+      # Step 7: Improved cleanup - keep last 2 images in Artifact Registry
+      - name: Smart cleanup - keep last 2 images for each repository
         run: |
+          set -e # Exit immediately if a command exits with a non-zero status
+          
+          # Set environment variable for the image base path
+          IMAGE_BASE="${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.REPO }}"
+          
           IMAGES=("${{ vars.IGNITEDAPI }}" "${{ vars.IGNITEDAPI_WORKERS }}" "${{ vars.IGNITEDAPI_SCHEDULER }}" "${{ vars.IGNITED_CHAT_STAGING }}")
+          IMAGES_TO_KEEP=2
           
           for IMAGE in "${IMAGES[@]}"; do
-            echo "Deleting all existing images for $IMAGE..."
+            echo "Cleaning up $IMAGE - keeping last $IMAGES_TO_KEEP images..."
             
             # Check if the repository exists before trying to delete images
-            if gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
-
-              # Get a list of all image digests to delete
-              DIGESTS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE --format="value(DIGEST)" 2>/dev/null || echo "")
-              
-              if [ -n "$DIGESTS" ]; then
-                echo "Found existing images for $IMAGE, deleting all of them"
-                
-                for DIGEST in $DIGESTS; do
-                  echo "Deleting image with digest $DIGEST"
-                  gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags || echo "Failed to delete digest $DIGEST"
-                done
-              else
-                echo "No existing images found for $IMAGE"
-              fi
-            else
+            if ! gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
               echo "Repository ${{ secrets.REPO }} doesn't exist yet or is not accessible, skipping cleanup"
+              continue
             fi
+            
+            # Get all image digests sorted by creation time (oldest first)
+            DIGESTS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
+                      --format="value(DIGEST),value(CREATE_TIME)" 2>/dev/null | sort -k2 | awk '{print $1}' || echo "")
+            
+            if [ -z "$DIGESTS" ]; then
+              echo "No existing images found for $IMAGE"
+              continue
+            fi
+            
+            # Count total images
+            TOTAL_IMAGES=$(echo "$DIGESTS" | wc -l)
+            echo "Found $TOTAL_IMAGES existing images for $IMAGE"
+            
+            # Calculate how many to delete (keep the most recent ones)
+            if [ $TOTAL_IMAGES -le $IMAGES_TO_KEEP ]; then
+              echo "Keeping all $TOTAL_IMAGES images for $IMAGE (≤ $IMAGES_TO_KEEP)"
+              continue
+            fi
+            
+            IMAGES_TO_DELETE=$((TOTAL_IMAGES - IMAGES_TO_KEEP))
+            echo "Deleting $IMAGES_TO_DELETE oldest images for $IMAGE"
+            
+            # Get just the oldest digests to delete
+            DIGESTS_TO_DELETE=$(echo "$DIGESTS" | head -n $IMAGES_TO_DELETE)
+            
+            # Delete each digest
+            for DIGEST in $DIGESTS_TO_DELETE; do
+              echo "Deleting image with digest $DIGEST"
+              if ! gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags; then
+                echo "Warning: Failed to delete digest $DIGEST - continuing with other deletions"
+              fi
+            done
+            
+            echo "Cleanup completed for $IMAGE - kept $IMAGES_TO_KEEP most recent images"
           done
       
-      # Step 8: Build new Docker images with specific commands for each service
+      # Add a step to get PR number for tagging
+      - name: Get PR Number
+        id: pr-number
+        run: |
+          # For pull requests
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "PR_NUMBER=pr-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          # For push events to branches
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            BRANCH_NAME=${GITHUB_REF##*/}
+            echo "PR_NUMBER=branch-${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          # For other events
+          else
+            echo "PR_NUMBER=manual-build" >> $GITHUB_OUTPUT
+          fi
+
+      # Step 8: Updated build with PR tagging and error handling
       - name: Build new images
         run: |
+          set -e # Exit immediately if any command fails
+          
           TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
-          echo "Building images with timestamp tag: $TIMESTAMP"
+          PR_TAG="${{ steps.pr-number.outputs.PR_NUMBER }}"
+          IMAGE_BASE="${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.REPO }}"
+          
+          echo "Building images with timestamp tag: $TIMESTAMP and PR tag: $PR_TAG"
           
           # Define the CMD instructions for each container using an associative array
           declare -A IMAGE_CMDS=(
@@ -101,29 +149,68 @@ jobs:
             ["${{ vars.IGNITED_CHAT_STAGING }}"]='["npm", "start"]'
           )
 
-          # Build each image with its specific CMD and both 'latest' and timestamp tags
+          # Build each image with its specific CMD and multiple tags
+          BUILD_SUCCESS=true
           for IMAGE in "${!IMAGE_CMDS[@]}"; do
             CMD_ARG=${IMAGE_CMDS[$IMAGE]}
-            echo "Building $IMAGE with CMD: $CMD_ARG and tag: $TIMESTAMP"
-            docker build -t $IMAGE_BASE/$IMAGE:latest -t $IMAGE_BASE/$IMAGE:$TIMESTAMP . \
-              --build-arg CMD="$CMD_ARG"
+            echo "Building $IMAGE with CMD: $CMD_ARG and tags: latest, $TIMESTAMP, $PR_TAG"
+            
+            if ! docker build -t $IMAGE_BASE/$IMAGE:latest \
+                            -t $IMAGE_BASE/$IMAGE:$TIMESTAMP \
+                            -t $IMAGE_BASE/$IMAGE:$PR_TAG \
+                            . --build-arg CMD="$CMD_ARG"; then
+              echo "::error::Failed to build image $IMAGE"
+              BUILD_SUCCESS=false
+            fi
           done
+          
+          if [ "$BUILD_SUCCESS" = false ]; then
+            echo "::error::One or more image builds failed"
+            exit 1
+          fi
 
-      # Step 9: Push all the newly built images to Google Artifact Registry repository
+      # Step 9: Updated push with proper error handling
       - name: Push new images
+        if: success() # Only run if previous steps succeeded
         run: |
+          set -e # Exit immediately if any command fails
+          
           TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
+          PR_TAG="${{ steps.pr-number.outputs.PR_NUMBER }}"
+          IMAGE_BASE="${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.REPO }}"
+          
+          PUSH_SUCCESS=true
           for IMAGE in ${{ vars.IGNITEDAPI }} ${{ vars.IGNITEDAPI_WORKERS }} ${{ vars.IGNITEDAPI_SCHEDULER }} ${{ vars.IGNITED_CHAT_STAGING }}; do
-            echo "Pushing $IMAGE:latest and $IMAGE:$TIMESTAMP"
-            docker push $IMAGE_BASE/$IMAGE:latest
-            docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP
+            echo "Pushing $IMAGE with tags: latest, $TIMESTAMP, $PR_TAG"
+            
+            if ! docker push $IMAGE_BASE/$IMAGE:latest; then
+              echo "::error::Failed to push $IMAGE:latest"
+              PUSH_SUCCESS=false
+            fi
+            
+            if ! docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP; then
+              echo "::error::Failed to push $IMAGE:$TIMESTAMP"
+              PUSH_SUCCESS=false
+            fi
+            
+            if ! docker push $IMAGE_BASE/$IMAGE:$PR_TAG; then
+              echo "::error::Failed to push $IMAGE:$PR_TAG"
+              PUSH_SUCCESS=false
+            fi
           done
+          
+          if [ "$PUSH_SUCCESS" = false ]; then
+            echo "::error::One or more image pushes failed"
+            exit 1
+          else
+            echo "All images successfully pushed to Artifact Registry"
+          fi
 
   ######################################################
   # JOB 2: Second job that depends on the first job completing
   ######################################################
   deploy:
-    # if: false 
+    if: false 
     runs-on: ubuntu-22.04
     needs: build-and-push
     environment: gcp-dev
@@ -188,7 +275,7 @@ jobs:
   # JOB 3: Conclude
   ######################################################
   finish:
-    # if: false 
+    if: false 
     name: Finalize Workflow
     runs-on: ubuntu-22.04
     needs: deploy

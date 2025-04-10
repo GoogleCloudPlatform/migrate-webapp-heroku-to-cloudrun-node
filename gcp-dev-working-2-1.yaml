@@ -123,7 +123,7 @@ jobs:
   # JOB 2: Second job that depends on the first job completing
   ######################################################
   deploy:
-    if: false 
+    # if: false 
     runs-on: ubuntu-22.04
     needs: build-and-push
     environment: gcp-dev
@@ -185,7 +185,7 @@ jobs:
           done
 
   finish:
-    if: false 
+    # if: false 
     name: Finalize Workflow
     runs-on: ubuntu-22.04
     needs: deploy

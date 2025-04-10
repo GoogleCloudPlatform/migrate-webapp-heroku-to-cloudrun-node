@@ -63,8 +63,8 @@ jobs:
         run: |
           set -e # Exit immediately if a command exits with a non-zero status
           
-          # Set environment variable for the image base path
-          IMAGE_BASE="${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.REPO }}"
+          # Set the correct IMAGE_BASE for Google Artifact Registry
+          IMAGE_BASE="${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
           
           IMAGES=("${{ vars.IGNITEDAPI }}" "${{ vars.IGNITEDAPI_WORKERS }}" "${{ vars.IGNITEDAPI_SCHEDULER }}" "${{ vars.IGNITED_CHAT_STAGING }}")
           IMAGES_TO_KEEP=2
@@ -113,21 +113,18 @@ jobs:
             
             echo "Cleanup completed for $IMAGE - kept $IMAGES_TO_KEEP most recent images"
           done
-      
+
       # Add a step to get PR number for tagging
       - name: Get PR Number
         id: pr-number
         run: |
           # For pull requests
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "PR_NUMBER=pr-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          # For push events to branches
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            BRANCH_NAME=${GITHUB_REF##*/}
-            echo "PR_NUMBER=branch-${BRANCH_NAME}" >> $GITHUB_OUTPUT
-          # For other events
+            echo "PR_NUMBER=PR-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          # For push events - use commit SHA instead of branch name
           else
-            echo "PR_NUMBER=manual-build" >> $GITHUB_OUTPUT
+            SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+            echo "PR_NUMBER=SHA-${SHORT_SHA}" >> $GITHUB_OUTPUT
           fi
 
       # Step 8: Updated build with PR tagging and error handling
@@ -137,7 +134,8 @@ jobs:
           
           TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
           PR_TAG="${{ steps.pr-number.outputs.PR_NUMBER }}"
-          IMAGE_BASE="${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.REPO }}"
+          # Set the correct IMAGE_BASE for Google Artifact Registry
+          IMAGE_BASE="${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
           
           echo "Building images with timestamp tag: $TIMESTAMP and PR tag: $PR_TAG"
           
@@ -169,7 +167,7 @@ jobs:
             exit 1
           fi
 
-      # Step 9: Updated push with proper error handling
+      # Step 9: Updated push with proper error handling and correct IMAGE_BASE
       - name: Push new images
         if: success() # Only run if previous steps succeeded
         run: |
@@ -177,24 +175,32 @@ jobs:
           
           TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
           PR_TAG="${{ steps.pr-number.outputs.PR_NUMBER }}"
-          IMAGE_BASE="${{ secrets.ARTIFACT_DOMAIN }}/${{ secrets.REPO }}"
+          # Set the correct IMAGE_BASE for Google Artifact Registry
+          IMAGE_BASE="${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
           
           PUSH_SUCCESS=true
           for IMAGE in ${{ vars.IGNITEDAPI }} ${{ vars.IGNITEDAPI_WORKERS }} ${{ vars.IGNITEDAPI_SCHEDULER }} ${{ vars.IGNITED_CHAT_STAGING }}; do
             echo "Pushing $IMAGE with tags: latest, $TIMESTAMP, $PR_TAG"
             
+            # Verify repository exists before pushing
+            if ! gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
+              echo "::error::Repository ${{ secrets.REPO }} doesn't exist or permission denied"
+              PUSH_SUCCESS=false
+              continue
+            fi
+            
             if ! docker push $IMAGE_BASE/$IMAGE:latest; then
-              echo "::error::Failed to push $IMAGE:latest"
+              echo "::error::Failed to push $IMAGE_BASE/$IMAGE:latest"
               PUSH_SUCCESS=false
             fi
             
             if ! docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP; then
-              echo "::error::Failed to push $IMAGE:$TIMESTAMP"
+              echo "::error::Failed to push $IMAGE_BASE/$IMAGE:$TIMESTAMP"
               PUSH_SUCCESS=false
             fi
             
             if ! docker push $IMAGE_BASE/$IMAGE:$PR_TAG; then
-              echo "::error::Failed to push $IMAGE:$PR_TAG"
+              echo "::error::Failed to push $IMAGE_BASE/$IMAGE:$PR_TAG"
               PUSH_SUCCESS=false
             fi
           done

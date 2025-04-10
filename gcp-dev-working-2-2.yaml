@@ -57,26 +57,7 @@ jobs:
         id: timestamp
         run: echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_OUTPUT
       
-      # Step to get tagging information
-      - name: Get tagging information
-        id: tags
-        run: |
-          # Get full commit SHA
-          COMMIT_SHA="${{ github.sha }}"
-          echo "COMMIT_SHA=${COMMIT_SHA}" >> $GITHUB_OUTPUT
-          
-          # Get short commit SHA (7 characters)
-          SHORT_SHA=$(echo ${COMMIT_SHA} | cut -c1-7)
-          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_OUTPUT
-          
-          # For pull requests, get PR number
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "PR_TAG=pr-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          else
-            # For direct pushes, use SHA as the PR tag
-            echo "PR_TAG=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
-          fi
-          
+      
       # Step 7: Improved cleanup - keep last 2 images in Artifact Registry
       - name: Smart cleanup - keep last 2 images for each repository
         run: |
@@ -146,17 +127,17 @@ jobs:
             echo "PR_NUMBER=SHA-${SHORT_SHA}" >> $GITHUB_OUTPUT
           fi
 
-      # Step 8: Updated build with commit SHA and PR tagging
+      # Step 8: Updated build with PR tagging and error handling
       - name: Build new images
         run: |
           set -e # Exit immediately if any command fails
           
-          COMMIT_SHA="${{ steps.tags.outputs.COMMIT_SHA }}"
-          PR_TAG="${{ steps.tags.outputs.PR_TAG }}"
+          TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
+          PR_TAG="${{ steps.pr-number.outputs.PR_NUMBER }}"
           # Set the correct IMAGE_BASE for Google Artifact Registry
           IMAGE_BASE="${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
           
-          echo "Building images with commit tag: $COMMIT_SHA and PR tag: $PR_TAG"
+          echo "Building images with timestamp tag: $TIMESTAMP and PR tag: $PR_TAG"
           
           # Define the CMD instructions for each container using an associative array
           declare -A IMAGE_CMDS=(
@@ -166,14 +147,14 @@ jobs:
             ["${{ vars.IGNITED_CHAT_STAGING }}"]='["npm", "start"]'
           )
 
-          # Build each image with its specific CMD and tags
+          # Build each image with its specific CMD and multiple tags
           BUILD_SUCCESS=true
           for IMAGE in "${!IMAGE_CMDS[@]}"; do
             CMD_ARG=${IMAGE_CMDS[$IMAGE]}
-            echo "Building $IMAGE with CMD: $CMD_ARG and tags: latest, $COMMIT_SHA, $PR_TAG"
+            echo "Building $IMAGE with CMD: $CMD_ARG and tags: latest, $TIMESTAMP, $PR_TAG"
             
             if ! docker build -t $IMAGE_BASE/$IMAGE:latest \
-                            -t $IMAGE_BASE/$IMAGE:$COMMIT_SHA \
+                            -t $IMAGE_BASE/$IMAGE:$TIMESTAMP \
                             -t $IMAGE_BASE/$IMAGE:$PR_TAG \
                             . --build-arg CMD="$CMD_ARG"; then
               echo "::error::Failed to build image $IMAGE"
@@ -192,14 +173,14 @@ jobs:
         run: |
           set -e # Exit immediately if any command fails
           
-          COMMIT_SHA="${{ steps.tags.outputs.COMMIT_SHA }}"
-          PR_TAG="${{ steps.tags.outputs.PR_TAG }}"
+          TIMESTAMP="${{ steps.timestamp.outputs.TIMESTAMP }}"
+          PR_TAG="${{ steps.pr-number.outputs.PR_NUMBER }}"
           # Set the correct IMAGE_BASE for Google Artifact Registry
           IMAGE_BASE="${{ secrets.REGION }}-docker.pkg.dev/${{ secrets.PROJECT_ID }}/${{ secrets.REPO }}"
           
           PUSH_SUCCESS=true
           for IMAGE in ${{ vars.IGNITEDAPI }} ${{ vars.IGNITEDAPI_WORKERS }} ${{ vars.IGNITEDAPI_SCHEDULER }} ${{ vars.IGNITED_CHAT_STAGING }}; do
-            echo "Pushing $IMAGE with tags: latest, $COMMIT_SHA, $PR_TAG"
+            echo "Pushing $IMAGE with tags: latest, $TIMESTAMP, $PR_TAG"
             
             # Verify repository exists before pushing
             if ! gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
@@ -213,8 +194,8 @@ jobs:
               PUSH_SUCCESS=false
             fi
             
-            if ! docker push $IMAGE_BASE/$IMAGE:$COMMIT_SHA; then
-              echo "::error::Failed to push $IMAGE_BASE/$IMAGE:$COMMIT_SHA"
+            if ! docker push $IMAGE_BASE/$IMAGE:$TIMESTAMP; then
+              echo "::error::Failed to push $IMAGE_BASE/$IMAGE:$TIMESTAMP"
               PUSH_SUCCESS=false
             fi
             
@@ -228,10 +209,7 @@ jobs:
             echo "::error::One or more image pushes failed"
             exit 1
           else
-            echo "All images successfully pushed with the following tags:"
-            echo "- latest"
-            echo "- $COMMIT_SHA (full commit SHA)"
-            echo "- $PR_TAG (PR number or SHA)"
+            echo "All images successfully pushed to Artifact Registry"
           fi
 
   ######################################################

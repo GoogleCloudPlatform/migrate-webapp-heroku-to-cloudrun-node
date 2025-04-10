@@ -133,18 +133,6 @@ jobs:
             echo "Cleanup completed for $IMAGE - kept $IMAGES_TO_KEEP most recent images"
           done
 
-      # Add a step to get PR number for tagging
-      - name: Get PR Number
-        id: pr-number
-        run: |
-          # For pull requests
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "PR_NUMBER=PR-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          # For push events - use commit SHA instead of branch name
-          else
-            SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-            echo "PR_NUMBER=SHA-${SHORT_SHA}" >> $GITHUB_OUTPUT
-          fi
 
       # Step 8: Updated build with commit SHA and PR tagging
       - name: Build new images

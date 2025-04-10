@@ -77,8 +77,8 @@ jobs:
             echo "PR_TAG=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
           fi
           
-      # Step 7: Improved cleanup - keep last 2 images in Artifact Registry
-      - name: Smart cleanup - keep last 2 images for each repository
+      # Step 7: Improved cleanup that properly deletes image versions
+      - name: Delete old images (keeping only latest 2)
         run: |
           set -e # Exit immediately if a command exits with a non-zero status
           
@@ -89,7 +89,7 @@ jobs:
           IMAGES_TO_KEEP=2
           
           for IMAGE in "${IMAGES[@]}"; do
-            echo "Cleaning up $IMAGE - keeping last $IMAGES_TO_KEEP images..."
+            echo "Cleaning up $IMAGE - keeping only latest $IMAGES_TO_KEEP versions..."
             
             # Check if the repository exists before trying to delete images
             if ! gcloud artifacts repositories describe ${{ secrets.REPO }} --location=${{ secrets.REGION }} &>/dev/null; then
@@ -97,36 +97,48 @@ jobs:
               continue
             fi
             
-            # Get all image digests sorted by creation time (oldest first)
-            DIGESTS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
-                      --format="value(DIGEST),value(CREATE_TIME)" 2>/dev/null | sort -k2 | awk '{print $1}' || echo "")
+            # Get all image versions sorted by creation time (newest first)
+            # Format: VERSION,DIGEST
+            VERSIONS=$(gcloud artifacts docker images list $IMAGE_BASE/$IMAGE \
+                      --format="value(VERSION),value(DIGEST),value(CREATE_TIME)" 2>/dev/null | sort -k3r | awk '{print $1","$2}' || echo "")
             
-            if [ -z "$DIGESTS" ]; then
+            if [ -z "$VERSIONS" ]; then
               echo "No existing images found for $IMAGE"
               continue
             fi
             
             # Count total images
-            TOTAL_IMAGES=$(echo "$DIGESTS" | wc -l)
+            TOTAL_IMAGES=$(echo "$VERSIONS" | wc -l)
             echo "Found $TOTAL_IMAGES existing images for $IMAGE"
             
-            # Calculate how many to delete (keep the most recent ones)
+            # Skip if we already have <= IMAGES_TO_KEEP
             if [ $TOTAL_IMAGES -le $IMAGES_TO_KEEP ]; then
-              echo "Keeping all $TOTAL_IMAGES images for $IMAGE (≤ $IMAGES_TO_KEEP)"
+              echo "Keeping all $TOTAL_IMAGES versions for $IMAGE (≤ $IMAGES_TO_KEEP)"
               continue
             fi
             
+            # Keep track of the images to delete
             IMAGES_TO_DELETE=$((TOTAL_IMAGES - IMAGES_TO_KEEP))
-            echo "Deleting $IMAGES_TO_DELETE oldest images for $IMAGE"
+            echo "Will delete $IMAGES_TO_DELETE oldest image versions for $IMAGE"
             
-            # Get just the oldest digests to delete
-            DIGESTS_TO_DELETE=$(echo "$DIGESTS" | head -n $IMAGES_TO_DELETE)
+            # Skip the first IMAGES_TO_KEEP (newest) versions, delete the rest
+            VERSIONS_TO_DELETE=$(echo "$VERSIONS" | tail -n $IMAGES_TO_DELETE)
             
-            # Delete each digest
-            for DIGEST in $DIGESTS_TO_DELETE; do
-              echo "Deleting image with digest $DIGEST"
-              if ! gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet --delete-tags; then
-                echo "Warning: Failed to delete digest $DIGEST - continuing with other deletions"
+            # Delete each version
+            for VERSION_DIGEST in $VERSIONS_TO_DELETE; do
+              # Split the version and digest
+              VERSION=$(echo $VERSION_DIGEST | cut -d',' -f1)
+              DIGEST=$(echo $VERSION_DIGEST | cut -d',' -f2)
+              
+              if [ -n "$VERSION" ] && [ "$VERSION" != "latest" ]; then
+                echo "Deleting $IMAGE:$VERSION"
+                gcloud artifacts docker tags delete $IMAGE_BASE/$IMAGE:$VERSION --quiet || echo "Warning: Failed to delete tag $VERSION"
+              fi
+              
+              # Now delete the image by digest (this actually removes the image)
+              if [ -n "$DIGEST" ]; then
+                echo "Deleting image digest $DIGEST"
+                gcloud artifacts docker images delete $IMAGE_BASE/$IMAGE@$DIGEST --quiet || echo "Warning: Failed to delete digest $DIGEST"
               fi
             done
             
